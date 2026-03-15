@@ -1,9 +1,104 @@
-# Issues
+# Known Issues
 
-This section contains information about known issues/bugs on USSD and how to resolve them for end users.
+This section documents known bugs on the USSD and their resolution steps.
 
-## 1. key `X` not found in any frame
+---
+
+## 1. `key 'X' not found in any frame`
 
 ### Cause
 
-### Resolution steps
+A caching bug in go-vise where it attempts to `RELOAD` a symbol that was skipped during the initial `LOAD` operation, resulting in a broken cache state.
+
+### Resolution
+
+1. Confirm the issue by checking the relevant session logs on Africa's Talking.
+2. In some cases, the issue self-corrects once the session is cleared — verify this before proceeding.
+3. If the issue persists, SSH into the server and navigate to the production USSD directory:
+
+```bash
+ssh user@host
+cd dev/sarafu-vise/
+```
+
+Run the CMD tool to trigger a cache cleanup for the affected user:
+
+```bash
+go run -tags online cmd/main.go -session-id=+254xxxxxxxxx
+```
+
+This should reproduce the same error the user is seeing. Run the command a second time to confirm the cache has been cleared:
+
+```bash
+go run -tags online cmd/main.go -session-id=+254xxxxxxxxx
+```
+
+A successful cleanup will display the USSD main menu instead of the error.
+
+---
+
+## 2. `key not found: 'X'`
+
+### Cause
+
+Similar to [Issue 1](#1-key-x-not-found-in-any-frame).
+
+### Resolution
+
+Follow the same steps as [Issue 1](#1-key-x-not-found-in-any-frame).
+
+---
+
+## 3. Incorrect admin privileges
+
+### Cause
+
+The admin flag for a user can occasionally be cleared or incorrectly set on the USSD. The root cause is currently unknown.
+
+### Resolution
+
+SSH into the server, navigate to the production USSD directory, and run the following — replacing the session ID and setting the flag value to `1` (grant) or `0` (revoke) as needed:
+
+```bash
+go run -tags logtrace devtools/admin/main.go -session-id=+254xxxxxxxxx admin 1
+```
+
+---
+
+## 4. Blank responses from the USSD
+
+### Cause
+
+After some time, or under heavy loads, postgres ends up having too many connections leading to timeouts on read and write operations. 
+
+This is diagnosed by seeing several "failed" sessions on Africa's Talking logs
+
+### Resolution
+
+SSH into the server, navigate to the ussd docker folder, and restart the ussd container
+
+```bash
+cd custodial-docker-stack/ussd/
+docker compose down ussd
+docker compose up -d ussd
+```
+
+---
+
+## 5. Replicating a user session for debugging
+
+### Overview
+
+Some users may encounter errors on specific menu nodes that cannot be diagnosed remotely. In these cases, the best approach is to replicate the user's session directly on the server to capture the full API responses and go-vise engine output.
+
+If none of the steps above resolve an issue, examining the full logtrace is the recommended next step.
+
+### Resolution
+
+SSH into the server, navigate to the production USSD directory, and run:
+
+```bash
+go run -tags online,logtrace cmd/main.go -session-id=+254xxxxxxxxx
+```
+
+This produces a detailed logtrace that exposes the exact node, API call, or engine error causing the issue.
