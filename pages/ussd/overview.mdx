@@ -1,1 +1,159 @@
 ## Overview
+The Sarafu USSD uses the [go-vise](https://github.com/nolash/go-vise) engine, a constrained size output virtual machine.
+
+The codebase is found on [sarafu-vise](https://git.grassecon.net/grassrootseconomics/sarafu-vise)
+
+---
+
+## Menu Flow: From main.vis to performing a Withdraw on M-Pesa
+
+The sections below trace the full navigation path a user takes from the main menu to initiating an M-Pesa withdrawal.
+
+### 1. `main.vis` - Main menu
+
+When a user dials the USSD code, they land on the main menu node after passing all checks on `root.vis`. The engine clears any temporary state, loads the user's vouchers and balance, and renders the menu options.
+
+```
+LOAD clear_temporary_value 2               # trigger external code handler "clear_temporary_value" - Clear any leftover state from a previous session
+RELOAD clear_temporary_value               # explicitly trigger "clear_temporary_value" every time this code is executed.
+LOAD manage_vouchers 160                   # trigger external code handler "manage_vouchers" - Load the user's vouchers
+RELOAD manage_vouchers                     # explicitly trigger "manage_vouchers" every time this code is executed.
+CATCH api_failure flag_api_call_error 1    # if the "flag_api_call_error" flag has been set, move to "api_failure"
+LOAD check_balance 148                     # trigger external code handler "check_balance" - Fetch the user's balance
+RELOAD check_balance                       # explicitly trigger "check_balance" every time this code is executed.
+MAP check_balance                          # make the result from "check_balance" available to the template renderer
+MOUT send 1                                # menu item
+MOUT swap 2                                # menu item
+MOUT vouchers 3                            # menu item
+MOUT select_pool 4                         # menu item
+MOUT mpesa 5                               # menu item
+MOUT account 6                             # menu item
+MOUT help 7                                # menu item
+MOUT quit 9                                # menu item
+HALT                                       # render template and wait for input
+INCMP credit_send 1                        # match menu selection 1, move to node "credit_send" on match
+INCMP swap_to_list 2                       # match menu selection 2, move to node "swap_to_list" on match
+INCMP my_vouchers 3                        # match menu selection 3, move to node "my_vouchers" on match
+INCMP select_pool 4                        # match menu selection 4, move to node "select_pool" on match
+INCMP mpesa 5                              # match menu selection 5, move to node "mpesa" on match
+INCMP my_account 6                         # match menu selection 6, move to node "my_account" on match
+INCMP help 7                               # match menu selection 7, move to node "help" on match 
+INCMP quit 9                               # match menu selection 9, move to node "quit" on match
+INCMP . *                                  # match any other input, and stay on this node
+```
+
+The user selects **5** to enter the M-Pesa submenu.
+
+---
+
+### 2. `mpesa.vis` — M-Pesa Submenu
+
+This node loads any outstanding credit/debt information and presents M-Pesa-related actions.
+
+```
+LOAD calc_credit_debt 150
+RELOAD calc_credit_debt
+CATCH api_failure flag_api_call_error 1
+MAP calc_credit_debt
+MOUT pay_debt 1
+MOUT deposit 2
+MOUT get_mpesa 3                         # Option 3: Withdraw to M-Pesa
+MOUT send_mpesa 4
+MOUT back 0
+MOUT quit 9
+HALT
+INCMP ^ 0                                # match menu selection 0, move to the previous node (in this case, main.vis)
+INCMP pay_debt 1
+INCMP pool_deposit 2
+INCMP get_mpesa 3
+INCMP send_mpesa 4
+INCMP quit 9
+INCMP . *
+```
+
+The user selects **3** to initiate a withdrawal.
+
+---
+
+### 3. `get_mpesa.vis` — Select a Voucher
+
+The user is presented with a paginated list of their vouchers to select from. The list is formatted to include the user's balance for each.
+
+```
+CATCH no_voucher flag_no_active_voucher 1               # if the "flag_no_active_voucher" flag has been set, move to "no_voucher.vis" node
+LOAD get_ordered_vouchers 0
+MAP get_ordered_vouchers                                # displays a list of vouchers for the user to select
+MOUT back 0
+MOUT quit 99
+MNEXT next 88                                           # menu choice to display for advancing one page
+MPREV prev 98                                           # menu choice to display for going back to the previous page
+HALT
+INCMP > 88                                              # handle the "next" menu choice
+INCMP < 98                                              # handle to "prev" menu choice
+INCMP _ 0
+INCMP quit 99
+LOAD get_mpesa_max_limit 89
+RELOAD get_mpesa_max_limit
+CATCH . flag_incorrect_voucher 1
+CATCH low_withdraw_mpesa_amount flag_incorrect_pool 1   # a check for a pool related error
+CATCH low_withdraw_mpesa_amount flag_low_swap_amount 1  # a check for low swap amounts if the user hasn't selected a stable coin
+CATCH low_withdraw_mpesa_amount flag_api_call_error 1   # a check for errors that originate from the API (404 errors when checking swap limits)
+INCMP mpesa_max_limit *
+```
+Once a valid voucher is selected, the engine checks available swap routes and fetches the maximum withdrawable amount.
+
+---
+
+### 4. `mpesa_max_limit.vis` — Review Withdrawal Limit
+
+The maximum amount available for withdrawal is displayed to the user, and any pending transaction data from prior sessions is cleared.
+
+```
+LOAD reset_transaction_amount 10                       # reset any pending data from previous transactions 
+RELOAD reset_transaction_amount
+MAP get_mpesa_max_limit                                # map to display the results of the max limit after the voucher passes checks
+MOUT back 0
+MOUT quit 9
+HALT
+INCMP _ 0
+INCMP quit 9
+LOAD get_mpesa_preview 90                             # get the preview of what the user should get once the transaction is successful
+RELOAD get_mpesa_preview
+CATCH api_failure flag_api_call_error 1
+CATCH invalid_get_mpesa_amount flag_invalid_amount 1
+INCMP get_mpesa_confirmation *
+```
+
+The user enters an amount and is taken to a confirmation screen.
+
+---
+
+### 5. `get_mpesa_confirmation.vis` — Preview & PIN Entry
+
+The user sees a summary of the transaction and is prompted to enter their PIN to authorise it.
+
+```
+MAP get_mpesa_preview                     # display the results of the mpesa preview; that also requests the user to input their PIN
+MOUT back 0
+MOUT quit 9
+HALT                                      # PIN input, or "0" for back and "9" for close
+LOAD authorize_account 6                  # check the input to set appropriate flags from valid PIN inputs
+RELOAD authorize_account
+CATCH incorrect_pin flag_incorrect_pin 1
+INCMP _ 0
+INCMP quit 9
+INCMP initiate_get_mpesa *
+```
+
+---
+
+### 6. `initiate_get_mpesa.vis` — Execute the Withdrawal
+
+The authorisation flag is checked and the withdrawal is submitted. This is a terminal node — reaching `HALT` here ends the session.
+
+```
+LOAD reset_incorrect_pin 6           # call the external function to clear any invalid PIN input flags
+CATCH _ flag_account_authorized 0    # move back to the previous node if the user isn't authorized to perform the action
+LOAD initiate_get_mpesa 0            # call the external function to initiate the mpesa withdrawal
+HALT                                 # single halt without any other statement initiates a session termination, as this is the last node
+```
