@@ -170,8 +170,6 @@ docker run -d \
   -p 5432:5432 \
   postgres:18-alpine
 
-pg_restore -h localhost -U postgres -d chain_data /path/to/dump.pgdump
-
 psql -h localhost -U postgres -d chain_data -f /path/to/dump.sql
 ```
 
@@ -180,10 +178,6 @@ psql -h localhost -U postgres -d chain_data -f /path/to/dump.sql
 ```bash
 # Create the database first
 createdb -h localhost -U postgres chain_data
-
-# Restore custom-format dump
-pg_restore -h localhost -U postgres -d chain_data /path/to/dump.pgdump
-
 # Or plain SQL
 psql -h localhost -U postgres -d chain_data -f /path/to/dump.sql
 ```
@@ -193,4 +187,3 @@ psql -h localhost -U postgres -d chain_data -f /path/to/dump.sql
 ## Querying with DuckDB
 
 [DuckDB](https://duckdb.org/) is a fast, in-process analytical SQL engine that runs locally with no server setup. It is well suited for ad-hoc analysis of this dataset.
-
