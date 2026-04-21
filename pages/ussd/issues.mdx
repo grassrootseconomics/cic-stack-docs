@@ -102,3 +102,49 @@ go run -tags online,logtrace cmd/main.go -session-id=+254xxxxxxxxx
 ```
 
 This produces a detailed logtrace that exposes the exact node, API call, or engine error causing the issue.
+
+## 6. `panic: down into same node as previous`
+
+### Cause
+
+The user's session state was saved mid-navigation (e.g. at path `root/main/mpesa/_first`). When go-vise loads that state and calls `runFirst()`, it tries to descend into the same node it is already at, causing a panic. This happens when a session terminates abnormally — the `ResetRoot: true` config only fires on a clean exit, so a dirty state can persist in the database indefinitely.
+
+### Resolution
+
+The fix is to delete only the go-vise navigation state record for the affected user. This resets their session to the root menu while leaving all user profile data (PIN, name, active voucher, etc.) intact.
+
+1. First, confirm how many state records exist for the user (read-only, safe to run):
+
+```sql
+SELECT
+    encode(key, 'hex') AS key_hex,
+    get_byte(key, 0)   AS prefix_byte,
+    length(value)      AS val_len,
+    updated
+FROM ussd.kv_vise
+WHERE position(decode('2b323534373931393330323438', 'hex') IN key) > 0
+ORDER BY prefix_byte;
+```
+
+Replace `2b323534373931393330323438` with the hex-encoded phone number of the affected user. To get the hex for any `+254xxxxxxxxx` number, run:
+
+```sql
+SELECT encode(convert_to('+254xxxxxxxxx', 'UTF8'), 'hex');
+```
+
+Records with `prefix_byte = 16` are navigation state; `prefix_byte = 32` are user profile data. Only the state record (prefix 16) needs to be removed.
+
+2. Delete the state record inside a transaction so you can verify the count before committing:
+
+```sql
+BEGIN;
+
+DELETE FROM ussd.kv_vise
+WHERE get_byte(key, 0) = 16
+  AND position(decode('2b323534373931393330323438', 'hex') IN key) > 0;
+
+-- Postgres echoes "DELETE N" here — commit only if N = 1
+COMMIT;  -- or ROLLBACK if the count was not 1
+```
+
+After the delete, the next time the user dials in they will be placed at the root menu with a fresh session.
